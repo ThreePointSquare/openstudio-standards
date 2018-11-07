@@ -82,38 +82,8 @@ class NECB2011
 
     # First pass of spaces to collect information into the space_zoning_data_array .
     model.getSpaces.sort.each do |space|
-      space_type_data = nil
-      # this will get the spacetype system index 8.4.4.8A  from the SpaceTypeData and BuildingTypeData in  (1-12)
-      space_system_index = nil
-      if space.spaceType.empty?
-        space_system_index = nil
-      else
-        # gets row information from standards spreadsheet.
-        space_type_data = standards_lookup_table_first(table_name: 'space_types', search_criteria: {'template' => self.class.name,
-                                                                                                        'space_type' => space.spaceType.get.standardsSpaceType.get,
-                                                                                                        'building_type' => space.spaceType.get.standardsBuildingType.get})
-        raise("Could not find spacetype information in #{self.class.name} for space_type => #{space.spaceType.get.standardsSpaceType.get} - #{space.spaceType.get.standardsBuildingType.get}") if space_type_data.nil?
-      end
+      sys_info = get_sys_selection_and_loads(model, space)
 
-      # Get the heating and cooling load for the space. Only Zones with a defined thermostat will have a load.
-      # Make sure we don't have sideeffects by changing the argument variables.
-      # Get the heating and cooling load for the space. Only Zones with a defined thermostat will have a load.
-      # Make sure we don't have sideeffects by changing the argument variables.
-
-      cooling_design_load =  space.spaceType.get.standardsSpaceType.get == '- undefined -' ? 0.0 : space.thermalZone.get.coolingDesignLoad.get * space.floorArea * space.multiplier / 1000.0
-      heating_design_load =  space.spaceType.get.standardsSpaceType.get == '- undefined -' ? 0.0 : space.thermalZone.get.heatingDesignLoad.get * space.floorArea * space.multiplier / 1000.0
-
-
-      # identify space-system_index and assign the right NECB system type 1-7.
-      necb_hvac_system_selection_table = standards_lookup_table_many(table_name: 'necb_hvac_system_selection_type')
-      necb_hvac_system_select = necb_hvac_system_selection_table.select do |necb_hvac_system_select|
-        necb_hvac_system_select['necb_hvac_system_selection_type'] == space_type_data['necb_hvac_system_selection_type'] &&
-            necb_hvac_system_select['min_stories'] <= model.getBuilding.standardsNumberOfAboveGroundStories.get &&
-            necb_hvac_system_select['max_stories'] >= model.getBuilding.standardsNumberOfAboveGroundStories.get &&
-            necb_hvac_system_select['min_cooling_capacity_kw'] <= cooling_design_load &&
-            necb_hvac_system_select['max_cooling_capacity_kw'] >= cooling_design_load
-      end.first
-      
       # get placement on floor, core or perimeter and if a top, bottom, middle or single story.
       horizontal_placement, vertical_placement = BTAP::Geometry::Spaces.get_space_placement(space)
       # dump all info into an array for debugging and iteration.
@@ -124,13 +94,13 @@ class NECB2011
             floor_area: space.floorArea,
             building_type_name: space.spaceType.get.standardsBuildingType.get, # space type name
             space_type_name: space.spaceType.get.standardsSpaceType.get, # space type name
-            necb_hvac_system_selection_type: space_type_data['necb_hvac_system_selection_type'], #
-            system_number: necb_hvac_system_select['system_type'].nil? ? nil : necb_hvac_system_select['system_type'], # the necb system type
+            necb_hvac_system_selection_type: sys_info[:space_type_data]['necb_hvac_system_selection_type'], #
+            system_number: sys_info[:necb_hvac_system_select]['system_type'].nil? ? nil : sys_info[:necb_hvac_system_select]['system_type'], # the necb system type
             number_of_stories: model.getBuilding.standardsNumberOfAboveGroundStories.get, # number of stories
-            heating_design_load: heating_design_load,
-            cooling_design_load: cooling_design_load,
-            is_dwelling_unit: necb_hvac_system_select['dwelling'], # Checks if it is a dwelling unit.
-            is_wildcard: necb_hvac_system_select['necb_hvac_system_selection_type'] == 'Wildcard' ? true : nil ,
+            heating_design_load: sys_info[:heating_design_load],
+            cooling_design_load: sys_info[:cooling_design_load],
+            is_dwelling_unit: sys_info[:necb_hvac_system_select]['dwelling'], # Checks if it is a dwelling unit.
+            is_wildcard: sys_info[:necb_hvac_system_select]['necb_hvac_system_selection_type'] == 'Wildcard' ? true : nil ,
             schedule_type: determine_necb_schedule_type(space).to_s,
             multiplier: (@space_multiplier_map[space.name.to_s].nil? ? 1 : @space_multiplier_map[space.name.to_s]),
         }.merge(BTAP::Geometry::Spaces.get_space_placement(space))
@@ -304,6 +274,47 @@ class NECB2011
       end
     end
     raise(" #{errors}") unless errors.empty?
+  end
+
+  def get_sys_selection_and_loads(model, space)
+    space_type_data = nil
+    # this will get the spacetype system index 8.4.4.8A  from the SpaceTypeData and BuildingTypeData in  (1-12)
+    space_system_index = nil
+    if space.spaceType.empty?
+      space_system_index = nil
+    else
+      # gets row information from standards spreadsheet.
+      space_type_data = standards_lookup_table_first(table_name: 'space_types', search_criteria: {'template' => self.class.name,
+                                                                                                  'space_type' => space.spaceType.get.standardsSpaceType.get,
+                                                                                                  'building_type' => space.spaceType.get.standardsBuildingType.get})
+      raise("Could not find spacetype information in #{self.class.name} for space_type => #{space.spaceType.get.standardsSpaceType.get} - #{space.spaceType.get.standardsBuildingType.get}") if space_type_data.nil?
+    end
+
+    # Get the heating and cooling load for the space. Only Zones with a defined thermostat will have a load.
+    # Make sure we don't have sideeffects by changing the argument variables.
+    # Get the heating and cooling load for the space. Only Zones with a defined thermostat will have a load.
+    # Make sure we don't have sideeffects by changing the argument variables.
+
+    cooling_design_load = space.spaceType.get.standardsSpaceType.get == '- undefined -' ? 0.0 : space.thermalZone.get.coolingDesignLoad.get * space.floorArea * space.multiplier / 1000.0
+    heating_design_load = space.spaceType.get.standardsSpaceType.get == '- undefined -' ? 0.0 : space.thermalZone.get.heatingDesignLoad.get * space.floorArea * space.multiplier / 1000.0
+
+
+    # identify space-system_index and assign the right NECB system type 1-7.
+    necb_hvac_system_selection_table = standards_lookup_table_many(table_name: 'necb_hvac_system_selection_type')
+    necb_hvac_system_select = necb_hvac_system_selection_table.select do |necb_hvac_system_select|
+      necb_hvac_system_select['necb_hvac_system_selection_type'] == space_type_data['necb_hvac_system_selection_type'] &&
+          necb_hvac_system_select['min_stories'] <= model.getBuilding.standardsNumberOfAboveGroundStories.get &&
+          necb_hvac_system_select['max_stories'] >= model.getBuilding.standardsNumberOfAboveGroundStories.get &&
+          necb_hvac_system_select['min_cooling_capacity_kw'] <= cooling_design_load &&
+          necb_hvac_system_select['max_cooling_capacity_kw'] >= cooling_design_load
+    end.first
+    sys_info = {
+        cooling_design_load: cooling_design_load,
+        heating_design_load: heating_design_load,
+        necb_hvac_system_select: necb_hvac_system_select,
+        space_type_data: space_type_data
+    }
+    return sys_info
   end
 
   # Creates thermal zones to contain each space, as defined for each building in the
